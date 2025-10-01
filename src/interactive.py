@@ -10,6 +10,7 @@ from typing import Optional, Callable, Dict, List
 import pandas as pd
 
 from . import qc, preprocessing, reduction, clustering, annotation, visualization
+import scanpy as sc
 
 
 class QCFilterWidget:
@@ -139,15 +140,23 @@ class QCFilterWidget:
             clear_output(wait=True)
             print("Applying filters...")
 
-            self.filtered_adata = qc.filter_cells(
-                self.adata,
-                min_counts=self.min_counts.value,
-                max_counts=self.max_counts.value,
-                min_genes=self.min_genes.value,
-                max_genes=self.max_genes.value,
-                max_mito=self.max_mito.value,
-                copy=True
+            # Create filter mask
+            n_cells_before = self.adata.n_obs
+            mask = (
+                (self.adata.obs['total_counts'] >= self.min_counts.value) &
+                (self.adata.obs['total_counts'] <= self.max_counts.value) &
+                (self.adata.obs['n_genes_by_counts'] >= self.min_genes.value) &
+                (self.adata.obs['n_genes_by_counts'] <= self.max_genes.value) &
+                (self.adata.obs['pct_counts_mt'] <= self.max_mito.value)
             )
+
+            self.filtered_adata = self.adata[mask].copy()
+            n_cells_after = self.filtered_adata.n_obs
+
+            print(f"Cells before: {n_cells_before}, after: {n_cells_after}, removed: {n_cells_before - n_cells_after}")
+
+            # Remove genes not detected in any cell
+            sc.pp.filter_genes(self.filtered_adata, min_cells=1)
 
             print("✓ Filters applied successfully!")
 
@@ -220,12 +229,12 @@ class DoubletFilterWidget:
             clear_output(wait=True)
             print("Removing doublets...")
 
-            self.filtered_adata = preprocessing.filter_doublets(
-                self.adata,
-                threshold=self.threshold.value,
-                copy=True
-            )
+            n_cells_before = self.adata.n_obs
+            mask = self.adata.obs['doublet_score'] < self.threshold.value
+            self.filtered_adata = self.adata[mask].copy()
+            n_cells_after = self.filtered_adata.n_obs
 
+            print(f"Cells before: {n_cells_before}, after: {n_cells_after}, doublets removed: {n_cells_before - n_cells_after}")
             print("✓ Doublets removed successfully!")
 
     def get_filtered_data(self) -> Optional[ad.AnnData]:
@@ -308,7 +317,7 @@ class ClusteringResolutionWidget:
         for res in resolutions:
             key = f'leiden_res{res}'
             if key not in adata.obs.columns:
-                clustering.compute_leiden_clustering(adata, resolution=res, key_added=key)
+                sc.tl.leiden(adata, resolution=res, key_added=key)
 
         self.resolution_selector = widgets.Dropdown(
             options=resolutions,
@@ -345,13 +354,11 @@ class ClusteringResolutionWidget:
 
             print(f"Resolution {resolution}: {n_clusters} clusters")
 
-            fig = clustering.plot_clustering_resolutions(
-                self.adata,
-                resolutions=self.resolutions,
-                ncols=2,
-                figsize=(12, 6*len(self.resolutions)//2)
-            )
-            plt.show()
+            # Plot all resolutions
+            keys = [f'leiden_res{r}' for r in self.resolutions if f'leiden_res{r}' in self.adata.obs.columns]
+            if keys:
+                sc.pl.umap(self.adata, color=keys, ncols=2, frameon=False,
+                          legend_loc='on data', legend_fontsize='x-small', show=True)
 
     def _on_button_click(self, b):
         """Confirm selection"""
@@ -424,8 +431,8 @@ class GeneVisualizationWidget:
 
             print(f"Plotting {len(valid_genes)} genes...")
 
-            fig = annotation.plot_genes_on_umap(self.adata, genes=valid_genes, ncols=3)
-            plt.show()
+            sc.pl.umap(self.adata, color=valid_genes, ncols=3, cmap='viridis',
+                      frameon=False, show=True)
 
 
 class AnnotationWidget:
@@ -543,8 +550,8 @@ class AnnotationWidget:
             print("✓ Annotations applied successfully!")
 
             # Plot annotated UMAP
-            fig = annotation.plot_annotated_umap(self.adata, figsize=(12, 10))
-            plt.show()
+            sc.pl.umap(self.adata, color='cell_type', legend_loc='right margin',
+                      frameon=False, show=True)
 
     def get_annotations(self) -> Dict[str, str]:
         """Get annotation dictionary"""

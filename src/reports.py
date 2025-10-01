@@ -11,7 +11,8 @@ import anndata as ad
 from typing import Optional, List
 from pathlib import Path
 
-from . import qc, visualization, annotation
+from . import qc, visualization, annotation, preprocessing, reduction, clustering
+import scanpy as sc
 
 
 def create_qc_report(adata: ad.AnnData,
@@ -50,7 +51,10 @@ def create_qc_report(adata: ad.AnnData,
         fig, ax = plt.subplots(figsize=(11, 8.5))
         ax.axis('off')
 
-        summary = qc.get_qc_summary(adata)
+        metrics = ['total_counts', 'n_genes_by_counts', 'pct_counts_mt']
+        if 'pct_counts_ribo' in adata.obs.columns:
+            metrics.append('pct_counts_ribo')
+        summary = adata.obs[metrics].describe().T
         summary_text = summary.to_string()
 
         ax.text(0.1, 0.9, 'QC Metrics Summary', fontsize=16, fontweight='bold',
@@ -81,7 +85,6 @@ def create_qc_report(adata: ad.AnnData,
 
         # Doublet scores if available
         if 'doublet_score' in adata.obs.columns:
-            from . import preprocessing
             fig = preprocessing.plot_doublet_scores(adata)
             pdf.savefig(fig, bbox_inches='tight')
             plt.close()
@@ -148,13 +151,11 @@ def create_analysis_report(adata: ad.AnnData,
 
         # PCA variance
         if 'pca' in adata.uns:
-            from . import reduction
             fig = reduction.plot_pca_variance(adata, n_pcs=50)
             pdf.savefig(fig, bbox_inches='tight')
             plt.close()
 
         # Cluster statistics
-        from . import clustering
         fig = clustering.plot_cluster_sizes(adata, clustering_key=clustering_key)
         pdf.savefig(fig, bbox_inches='tight')
         plt.close()
@@ -177,10 +178,11 @@ def create_analysis_report(adata: ad.AnnData,
         # Marker genes heatmap
         if 'rank_genes_groups' in adata.uns:
             try:
-                fig = annotation.plot_marker_genes_heatmap(
+                fig = sc.pl.rank_genes_groups_heatmap(
                     adata,
                     n_genes=10,
-                    clustering_key=clustering_key
+                    groupby=clustering_key,
+                    show=False
                 )
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close()
@@ -189,10 +191,11 @@ def create_analysis_report(adata: ad.AnnData,
 
             # Marker genes dotplot
             try:
-                fig = annotation.plot_marker_genes_dotplot(
+                fig = sc.pl.rank_genes_groups_dotplot(
                     adata,
                     n_genes=5,
-                    clustering_key=clustering_key
+                    groupby=clustering_key,
+                    show=False
                 )
                 pdf.savefig(fig, bbox_inches='tight')
                 plt.close()
@@ -202,9 +205,12 @@ def create_analysis_report(adata: ad.AnnData,
         # Custom marker genes if provided
         if marker_genes:
             try:
-                fig = annotation.plot_genes_on_umap(adata, genes=marker_genes, ncols=3)
-                pdf.savefig(fig, bbox_inches='tight')
-                plt.close()
+                valid_genes = [g for g in marker_genes if g in adata.var_names]
+                if valid_genes:
+                    fig = sc.pl.umap(adata, color=valid_genes, ncols=3, cmap='viridis',
+                                    frameon=False, show=False, return_fig=True)
+                    pdf.savefig(fig, bbox_inches='tight')
+                    plt.close()
             except Exception as e:
                 print(f"Could not plot marker genes: {e}")
 
@@ -228,10 +234,13 @@ def create_analysis_report(adata: ad.AnnData,
             plt.close()
 
             # Annotated UMAP
-            fig = annotation.plot_annotated_umap(
+            fig = sc.pl.umap(
                 adata,
-                annotation_key=annotation_key,
-                figsize=(12, 10)
+                color=annotation_key,
+                legend_loc='right margin',
+                frameon=False,
+                show=False,
+                return_fig=True
             )
             pdf.savefig(fig, bbox_inches='tight')
             plt.close()
